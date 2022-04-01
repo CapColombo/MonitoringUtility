@@ -8,76 +8,74 @@ namespace ScyoriTestTask;
 class Program
 {
     const string APPSETTINGS = "appsettings.json"; // файл конфигурации
-    const string CONNECTION_RESULTS = "connection_results.json"; // файл с результатами
-    const string EMAIL_LOGIN = "***@gmail.com"; // email отправителя
-    const string EMAIL_PASSWORD = "***"; // пароль отправителя
-    const string SMTP_SERVER = "smtp.gmail.com";
-    const int SMTP_PORT = 587;
 
     static async Task Main(string[] args)
     {
+        DataModel? data;
+
+        // считывание настроек из JSON
+        try
+        {
+            string json = File.ReadAllText(APPSETTINGS);
+            data = JsonConvert.DeserializeObject<DataModel>(json);
+        }
+        catch (FileNotFoundException)
+        {
+            Console.WriteLine("Не удалось найти файл с настройками!");
+            Console.ReadKey();
+            return;
+        }
+
         // чтобы получить результаты последней проверки, в аргументы необходимо ввести "check"
         if (args.Length != 0 && args.Contains("check"))
         {
-            try
-            {
-                Console.WriteLine("Считывание последних данных...");
-                string path = Environment.CurrentDirectory;
-                string json = File.ReadAllLines($"{CONNECTION_RESULTS}").Last(); // @$"bin\Debug\net6.0\{CONNECTION_RESULTS}"
-                ResultsModel? data = JsonConvert.DeserializeObject<ResultsModel>(json);
-
-                Console.WriteLine($"Дата: {data.Time}");
-                Console.WriteLine($"{data.SiteResponse}");
-                Console.WriteLine($"{data.DbResponse}");
-                Console.ReadKey();
-            }
-            catch (InvalidOperationException)
-            {
-                Console.WriteLine("Данные не найдены");
-                Console.ReadKey();
-            }
+            GetLastResults(data.ConnectionResultsPath);
+            Console.ReadKey();
+            return;
         }
-
         else if (args.Length != 0)
         { 
             Console.WriteLine("Неизвестный аргумент");
             Console.ReadKey();
+            return;
         }
+        
+        // проверка соединения с сайтом и БД
+        bool isSiteResponds = await CheckWebsiteConnection(data.WebsiteConnectionString);
+        CheckDatabaseConnection(data.DatabaseConnectionString, out Dictionary<string, string> dbResults);
 
-        // если аргументов нет, то выполняется проверка соединений
-        else
+        SaveToFile(data.ConnectionResultsPath, data.WebsiteConnectionString, isSiteResponds, dbResults);
+        SendToEmail(data.EmailAdresses, data.EmailLogin, data.EmailPassword,
+            data.ConnectionResultsPath, data.SmtpServer, data.SmtpPort);
+        Console.ReadKey();
+    }
+
+    static void GetLastResults(string path)
+    {
+        try
         {
-            DataModel? data;
+            Console.WriteLine("Считывание последних данных...");
+            string json = File.ReadAllLines($"{path}").Last();
+            ResultsModel? result = JsonConvert.DeserializeObject<ResultsModel>(json);
 
-            // считывание строк из JSON
-            try
-            {
-                string json = File.ReadAllText(APPSETTINGS);
-                data = JsonConvert.DeserializeObject<DataModel>(json);
-            }
-            catch (Exception)
-            {
-                Console.WriteLine("Не удалось найти файл с настройками!");
-                Console.ReadKey();
-                return;
-            }
-            
-            // проверка соединения с сайтом и БД
-            bool isSiteResponds = await CheckWebsiteConnection(data.WebsiteConnectionString);
-            bool isDBResponds = CheckDatabaseConnection(data.DatabaseConnectionString);
-
-            SaveToFile(isSiteResponds, isDBResponds);
-            SendToEmail(data.EmailAdresses, CONNECTION_RESULTS);
-            Console.ReadKey();
+            Console.WriteLine($"Дата: {result.Time}");
+            Console.WriteLine($"{result.SiteResponse}");
+            Console.WriteLine($"{result.DbResponse}");
+        }
+        catch (InvalidOperationException)
+        {
+            Console.WriteLine("Данные не найдены");
         }
     }
 
-    static void SaveToFile(bool isSiteResponds, bool isDBResponds)
+    static void SaveToFile(string path, string uri, bool isSiteResponds, Dictionary<string, string> dbResults)
     {
-        using StreamWriter sw = new(CONNECTION_RESULTS, true);
+        using StreamWriter sw = new(path, true);
 
-        string db = isDBResponds ? "Соединение к базе данных прошло успешно" : "Не удалось подключиться к базе данных";
-        string site = isSiteResponds ? "Ответ от сайта получен" : "Не удалось получить ответ от сайта";
+        string db = bool.Parse(dbResults["connection"]) ?
+            $"Соединение к базе данных {dbResults["dbName"]} на сервере {dbResults["dbServer"]} прошло успешно" :
+                $"Не удалось подключиться к базе данных {dbResults["dbName"]} на сервере {dbResults["dbServer"]}";
+        string site = isSiteResponds ? $"Ответ от сайта {uri} получен" : $"Не удалось получить ответ от сайта {uri}";
         var time = DateTime.Now; // текущее время
 
         ResultsModel results = new() { DbResponse = db, SiteResponse = site, Time = time };
@@ -88,15 +86,16 @@ class Program
         Console.WriteLine("Запись в файл произведена");
     }
 
-    static void SendToEmail(string[] adresses, string filePath)
+    static void SendToEmail(string[] adresses, string login, string password,
+        string filePath, string smtpServer, int smtpPort)
     {
-        if (adresses == null)
+        if (string.IsNullOrEmpty(adresses[0]))
         {
             Console.WriteLine("Не указан адрес электронной почты");
             return;
         }
 
-        MailAddress from = new(EMAIL_LOGIN, "User"); // отправитель
+        MailAddress from = new(login, "User"); // отправитель
 
         foreach (var adress in adresses)
         {
@@ -109,8 +108,8 @@ class Program
                 m.Attachments.Add(new Attachment(filePath)); // прикрепляем файл
                 m.Body = "<h2>Письмо с результатами</h2>"; // текст письма
 
-                SmtpClient smtp = new(SMTP_SERVER, SMTP_PORT); // адрес smtp-сервера и порт
-                smtp.Credentials = new NetworkCredential(EMAIL_LOGIN, EMAIL_PASSWORD); // логин и пароль
+                SmtpClient smtp = new(smtpServer, smtpPort); // адрес smtp-сервера и порт
+                smtp.Credentials = new NetworkCredential(login, password); // логин и пароль
                 smtp.EnableSsl = true;
                 smtp.Timeout = 10000; // ожидание 10 секунд
                 smtp.Send(m);
@@ -134,12 +133,12 @@ class Program
 
             if (result != null)
             {
-                Console.WriteLine("Ответ от сайта получен");
+                Console.WriteLine($"Ответ от сайта {uri} получен");
                 return true;
             }
             else
             {
-                Console.WriteLine("Не удалось получить ответ от сайта");
+                Console.WriteLine($"Не удалось получить ответ от сайта {uri}");
                 return false;
             }
         }
@@ -150,19 +149,29 @@ class Program
         }
     }
 
-    static bool CheckDatabaseConnection(string connectionString)
+    static void CheckDatabaseConnection(string connectionString, out Dictionary<string, string> dbResults)
     {
+        string[] connectionParams = connectionString.Split(';'); // параметры подключения
+        int index = connectionParams[0].IndexOf('='); // индекс знака =
+        int index2 = connectionParams[1].IndexOf('='); // индекс знака =
+
+        dbResults = new();
+        dbResults["dbServer"] = connectionParams[0].Substring(index+1); // сервер БД 
+        dbResults["dbName"] = connectionParams[1].Substring(index2+1); // имя БД
+
         SqlConnection connection = new(connectionString);
         try
         {
             connection.Open();
-            Console.WriteLine("Успешное соединение к базе данных");
-            return true;
+            Console.WriteLine($"Успешное соединение к базе данных {dbResults["dbName"]} на сервере {dbResults["dbServer"]}");
+            dbResults["connection"] = "true";
+            return;
         }
         catch (SqlException)
         {
-            Console.WriteLine("Не удалось подключиться к базе данных");
-            return false; 
+            Console.WriteLine($"Не удалось подключиться к базе данных {dbResults["dbName"]} на сервере {dbResults["dbServer"]}");
+            dbResults["connection"] = "false";
+            return; 
         }
         finally
         {

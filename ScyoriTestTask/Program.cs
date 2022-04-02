@@ -41,10 +41,10 @@ class Program
         }
         
         // проверка соединения с сайтом и БД
-        bool isSiteResponds = await CheckWebsiteConnection(data.WebsiteConnectionString);
-        CheckDatabaseConnection(data.DatabaseConnectionString, out Dictionary<string, string> dbResults);
+        string siteResponse = await CheckWebsiteConnection(data.WebsiteConnectionString);
+        string dbResponse = CheckDatabaseConnection(data.DatabaseConnectionString);
 
-        SaveToFile(data.ConnectionResultsPath, data.WebsiteConnectionString, isSiteResponds, dbResults);
+        SaveToFile(data.ConnectionResultsPath, siteResponse, dbResponse);
         SendToEmail(data.EmailAdresses, data.EmailLogin, data.EmailPassword,
             data.ConnectionResultsPath, data.SmtpServer, data.SmtpPort);
         Console.ReadKey();
@@ -68,17 +68,13 @@ class Program
         }
     }
 
-    static void SaveToFile(string path, string uri, bool isSiteResponds, Dictionary<string, string> dbResults)
+    static void SaveToFile(string filePath, string siteResult, string dbResult)
     {
-        using StreamWriter sw = new(path, true);
+        using StreamWriter sw = new(filePath, true);
 
-        string db = bool.Parse(dbResults["connection"]) ?
-            $"Соединение к базе данных {dbResults["dbName"]} на сервере {dbResults["dbServer"]} прошло успешно" :
-                $"Не удалось подключиться к базе данных {dbResults["dbName"]} на сервере {dbResults["dbServer"]}";
-        string site = isSiteResponds ? $"Ответ от сайта {uri} получен" : $"Не удалось получить ответ от сайта {uri}";
         var time = DateTime.Now; // текущее время
 
-        ResultsModel results = new() { DbResponse = db, SiteResponse = site, Time = time };
+        ResultsModel results = new() { DbResponse = dbResult, SiteResponse = siteResult, Time = time };
         string json = JsonConvert.SerializeObject(results);
         sw.WriteLine(json);
         sw.Close();
@@ -124,54 +120,56 @@ class Program
         }
     }
 
-    static async Task<bool> CheckWebsiteConnection(string uri)
+    static async Task<string> CheckWebsiteConnection(string uri)
     {
         try
         {
             HttpClient client = new();
-            var result = await client.GetAsync(uri);
+            var connectionResult = await client.GetAsync(uri);
 
-            if (result != null)
+            if (connectionResult != null)
             {
-                Console.WriteLine($"Ответ от сайта {uri} получен");
-                return true;
+                string result = $"Ответ от сайта {uri} получен";
+                Console.WriteLine(result);
+                return result;
             }
             else
             {
-                Console.WriteLine($"Не удалось получить ответ от сайта {uri}");
-                return false;
+                string result = $"Не удалось получить ответ от сайта {uri}";
+                Console.WriteLine(result);
+                return result;
             }
         }
         catch (HttpRequestException)
         {
-            Console.WriteLine("Неправильный адрес");
-            return false;
+            string result = "Неправильный адрес";
+            Console.WriteLine(result);
+            return result;
         }
     }
 
-    static void CheckDatabaseConnection(string connectionString, out Dictionary<string, string> dbResults)
+    static string CheckDatabaseConnection(string connectionString)
     {
         string[] connectionParams = connectionString.Split(';'); // параметры подключения
         int index = connectionParams[0].IndexOf('='); // индекс знака =
         int index2 = connectionParams[1].IndexOf('='); // индекс знака =
 
-        dbResults = new();
-        dbResults["dbServer"] = connectionParams[0].Substring(index+1); // сервер БД 
-        dbResults["dbName"] = connectionParams[1].Substring(index2+1); // имя БД
+        string dbServer = connectionParams[0].Substring(index+1); // сервер БД 
+        string dbName = connectionParams[1].Substring(index2+1); // имя БД
 
         SqlConnection connection = new(connectionString);
         try
         {
             connection.Open();
-            Console.WriteLine($"Успешное соединение к базе данных {dbResults["dbName"]} на сервере {dbResults["dbServer"]}");
-            dbResults["connection"] = "true";
-            return;
+            string result = $"Успешное соединение к базе данных {dbName} на сервере {dbServer}";
+            Console.WriteLine(result);
+            return result;
         }
         catch (SqlException)
         {
-            Console.WriteLine($"Не удалось подключиться к базе данных {dbResults["dbName"]} на сервере {dbResults["dbServer"]}");
-            dbResults["connection"] = "false";
-            return; 
+            string result = $"Не удалось подключиться к базе данных {dbName} на сервере {dbServer}";
+            Console.WriteLine(result);
+            return result; 
         }
         finally
         {
